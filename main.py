@@ -44,6 +44,7 @@ def fetch_tweet(name):
         consumer_secret=os.environ.get("CONSUMER_SECRET"),
         access_token_key=os.environ.get("ACCESS_TOKEN_KEY"),
         access_token_secret=os.environ.get("ACCESS_TOKEN_SECRET"),
+        tweet_mode="extended",
     )
 
     statuses = api.GetUserTimeline(screen_name=name)
@@ -106,7 +107,7 @@ def upload_image(tweet, access_token):
                 sys.exit(1)
 
 
-def execute():
+def execute(event, context):
     load_dotenv(verbose=True)
 
     access_token = resresh_token_to_access_token()
@@ -115,6 +116,3 @@ def execute():
         print(f"{user} is start.")
         upload_image(fetch_tweet(user), access_token)
         print(f"{user} is end.")
-
-
-execute()
