@@ -7,6 +7,13 @@ import sys
 import time
 import os
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import firestore
+from firebase_admin import credentials
+
+# global variables
+db = None
+access_token = None
 
 
 def tweet_list_to_tuple(s):
@@ -38,7 +45,7 @@ def resresh_token_to_access_token():
     return json.loads(response.text)["access_token"]
 
 
-def fetch_tweet(name):
+def fetch_tweet(name, since_id):
     api = twitter.Api(
         consumer_key=os.environ.get("CONSUMER_KEY"),
         consumer_secret=os.environ.get("CONSUMER_SECRET"),
@@ -47,13 +54,13 @@ def fetch_tweet(name):
         tweet_mode="extended",
     )
 
-    statuses = api.GetUserTimeline(screen_name=name)
+    statuses = api.GetUserTimeline(screen_name=name, since_id=since_id)
     return dict(
         filter(lambda m: m[1], map(lambda m: tweet_list_to_tuple(m), statuses))
     )  # noqa: E501
 
 
-def create_upload_header(access_token, key, i):
+def generate_upload_header(key, i):
     return {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/octet-stream",
@@ -62,7 +69,14 @@ def create_upload_header(access_token, key, i):
     }
 
 
-def upload_image(tweet, access_token):
+def generate_create_header():
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+
+def upload_image(tweet):
     for key, value in tweet.items():
         for i, url in enumerate(value):
             for count in range(2):
@@ -72,7 +86,7 @@ def upload_image(tweet, access_token):
                 upload_response = requests.post(
                     "https://photoslibrary.googleapis.com/v1/uploads",
                     data=image,
-                    headers=create_upload_header(access_token, key, i),
+                    headers=generate_upload_header(key, i),
                 )
                 if int(upload_response.status_code) != 200:
                     print(f"upload is fail. image url is {url}")
@@ -92,10 +106,7 @@ def upload_image(tweet, access_token):
                 create_response = requests.post(
                     "https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
                     data=json.dumps(data_dict),
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=generate_create_header(),
                 )
                 if int(create_response.status_code) != 200:
                     print(f"create is fail. image url is {url}")
@@ -107,12 +118,31 @@ def upload_image(tweet, access_token):
                 sys.exit(1)
 
 
-def execute(event, context):
+def init_application():
     load_dotenv(verbose=True)
 
+    global db
+    global access_token
+
+    cred = credentials.Certificate(json.loads(os.environ.get("FIREBASE_KEY")))
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
     access_token = resresh_token_to_access_token()
 
-    for user in str(os.environ.get("USER_LIST")).split(","):
-        print(f"{user} is start.")
-        upload_image(fetch_tweet(user), access_token)
-        print(f"{user} is end.")
+
+def tasogare_image(event, context):
+    init_application()
+
+    firebase_collection = db.collection(os.environ.get("FIREBASE_COLLECTION_NAME"))
+    docs = firebase_collection.get()
+    for doc in docs:
+        document_data = doc.to_dict()
+        screen_name = document_data["screen_name"]
+        print(f"{screen_name} is start.")
+        tweet = fetch_tweet(screen_name, document_data["since_id"])
+        if tweet:
+            upload_image(tweet)
+            firebase_collection.document(f"{doc.id}").set(
+                {"screen_name": screen_name, "since_id": max(map(lambda m: m, tweet))}
+            )
+        print(f"{screen_name} is end.")
